@@ -59,8 +59,10 @@ ASTNode *AST::transform_node_iter(syntax_tree_node *n) {
   } else if (_STR_EQ(n->name, "var-declaration")) {
     auto node = new ASTVarDeclaration();
     // NOTE: 思考 ASTVarDeclaration的结构，需要填充的字段有哪些
+    //至少应该包含变量类型、变量名、或者数组声明的数组大小等
     // type
     // 为什么不会有 TYPE_VOID?
+    //因为只有在函数声明（fun-declaration）部分才可能出现 TYPE_VOID
     if (_STR_EQ(n->children[0]->children[0]->name, "int"))
       node->type = TYPE_INT;
     else
