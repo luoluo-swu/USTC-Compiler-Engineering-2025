@@ -112,5 +112,11 @@ class CminusfBuilder : public ASTVisitor {
         Function *func = nullptr;
         // detect scope pre-enter (for elegance only)
         bool pre_enter_scope = false;
+        
+        Type *expected_ret_type = nullptr;  // 当前函数的返回类型
+        Value *last_ret_val = nullptr;      // 最近一次 return 的返回值
+        bool in_loop = false;               // 当前是否在循环中
+        BasicBlock *loop_cond_bb = nullptr; // 当前循环的条件块（break/continue支持）
+        BasicBlock *loop_end_bb = nullptr;  // 当前循环的退出块（break跳转）
     } context;
 };
