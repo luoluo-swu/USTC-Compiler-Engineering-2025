@@ -58,44 +58,39 @@ Value* CminusfBuilder::visit(ASTNum &node) {
 }
 
 Value* CminusfBuilder::visit(ASTVarDeclaration &node) {
-    //add code
-    Type *var_type;
-    if (node.type == TYPE_INT)
-        var_type = module->get_int32_type();
-    else
-        var_type = module->get_float_type();
-    if (node.num == nullptr) {
+    Type *var_type = (node.type == TYPE_INT) ? INT32_T : FLOAT_T;
+
+    if (node.num == nullptr) { // 普通变量
+        Value *var = nullptr;
         if (scope.in_global()) {
-            auto initializer = ConstantZero::get(var_type, module.get());
-            auto var = GlobalVariable::create
-                    (
-                    node.id,
-                    module.get(),
-                    var_type,
-                    false,
-                    initializer);
-            scope.push(node.id, var);
+            var = GlobalVariable::create(
+                node.id,
+                module.get(),
+                var_type,
+                false,
+                ConstantZero::get(var_type, module.get())
+            );
         } else {
-            auto var = builder->create_alloca(var_type);
-            scope.push(node.id, var);
+            var = builder->create_alloca(var_type);
         }
-    } else {
+        scope.push(node.id, var);
+    } else { // 数组
         auto *array_type = ArrayType::get(var_type, node.num->i_val);
+        Value *var = nullptr;
         if (scope.in_global()) {
-            auto initializer = ConstantZero::get(array_type, module.get());
-            auto var = GlobalVariable::create
-                    (
-                    node.id,
-                    module.get(),
-                    array_type,
-                    false,
-                    initializer);
-            scope.push(node.id, var);
+            var = GlobalVariable::create(
+                node.id,
+                module.get(),
+                array_type,
+                false,
+                ConstantZero::get(array_type, module.get())
+            );
         } else {
-            auto var = builder->create_alloca(array_type);
-            scope.push(node.id, var);
+            var = builder->create_alloca(array_type);
         }
+        scope.push(node.id, var);
     }
+
     return nullptr;
 }
 
@@ -163,25 +158,29 @@ Value* CminusfBuilder::visit(ASTParam &node) {
 }
 
 Value* CminusfBuilder::visit(ASTCompoundStmt &node) {
-    //add code
     bool need_exit_scope = !context.pre_enter_scope;
     if (context.pre_enter_scope) {
-    context.pre_enter_scope = false;
+        context.pre_enter_scope = false;
     } else {
-    scope.enter();
+        scope.enter();
     }
+
+    // 声明先生成
     for (auto &decl : node.local_declarations) {
         decl->accept(*this);
     }
 
+    // 语句生成
     for (auto &stmt : node.statement_list) {
         stmt->accept(*this);
-        if (builder->get_insert_block()->get_terminator() == nullptr)
+        if (builder->get_insert_block()->get_terminator() != nullptr)
             break;
     }
+
     if (need_exit_scope) {
         scope.exit();
     }
+
     return nullptr;
 }
 
@@ -378,15 +377,15 @@ Value* CminusfBuilder::visit(ASTAssignExpression &node) {
 
 Value* CminusfBuilder::visit(ASTSimpleExpression &node) {
     ///add code
-    Value* l_val = node.additive_expression_l->accept(*this);
-
     if (node.additive_expression_r == nullptr) {
-    // 只需要左边表达式，直接返回值
-        return l_val;
-    } else {
-        Value* r_val = node.additive_expression_r->accept(*this);
-        bool is_int = promote(builder.get(), &l_val, &r_val);
-        Value *cmp;
+        return node.additive_expression_l->accept(*this);
+    }
+
+    auto *l_val = node.additive_expression_l->accept(*this);
+    auto *r_val = node.additive_expression_r->accept(*this);
+    bool is_int = promote(&*builder, &l_val, &r_val);
+
+    Value *cmp = nullptr;
         switch (node.op) {
         case OP_LT:
             if (is_int)
@@ -426,9 +425,7 @@ Value* CminusfBuilder::visit(ASTSimpleExpression &node) {
             break;
         }
 
-        return builder->create_zext(cmp, INT32_T);
-    }
-    return nullptr;
+    return builder->create_zext(cmp, INT32_T);
 }
 
 Value* CminusfBuilder::visit(ASTAdditiveExpression &node) {
