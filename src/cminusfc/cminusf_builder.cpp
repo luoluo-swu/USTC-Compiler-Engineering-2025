@@ -59,39 +59,27 @@ Value* CminusfBuilder::visit(ASTNum &node) {
 
 Value* CminusfBuilder::visit(ASTVarDeclaration &node) {
     Type *var_type = (node.type == TYPE_INT) ? INT32_T : FLOAT_T;
+    Value *var = nullptr;
 
-    if (node.num == nullptr) { // 普通变量
-        Value *var = nullptr;
+    if (node.num == nullptr) {
         if (scope.in_global()) {
-            var = GlobalVariable::create(
-                node.id,
-                module.get(),
-                var_type,
-                false,
-                ConstantZero::get(var_type, module.get())
-            );
+            auto initializer = ConstantZero::get(var_type, module.get());
+            var = GlobalVariable::create(node.id, module.get(), var_type, false, initializer);
         } else {
             var = builder->create_alloca(var_type);
         }
-        scope.push(node.id, var);
-    } else { // 数组
+    } else {
         auto *array_type = ArrayType::get(var_type, node.num->i_val);
-        Value *var = nullptr;
         if (scope.in_global()) {
-            var = GlobalVariable::create(
-                node.id,
-                module.get(),
-                array_type,
-                false,
-                ConstantZero::get(array_type, module.get())
-            );
+            auto initializer = ConstantZero::get(array_type, module.get());
+            var = GlobalVariable::create(node.id, module.get(), array_type, false, initializer);
         } else {
             var = builder->create_alloca(array_type);
         }
-        scope.push(node.id, var);
     }
 
-    return nullptr;
+    scope.push(node.id, var);
+    return var;
 }
 
 Value* CminusfBuilder::visit(ASTFunDeclaration &node) {
@@ -159,29 +147,23 @@ Value* CminusfBuilder::visit(ASTParam &node) {
 
 Value* CminusfBuilder::visit(ASTCompoundStmt &node) {
     bool need_exit_scope = !context.pre_enter_scope;
-    if (context.pre_enter_scope) {
-        context.pre_enter_scope = false;
-    } else {
-        scope.enter();
-    }
+    if (context.pre_enter_scope) context.pre_enter_scope = false;
+    else scope.enter();
 
-    // 声明先生成
-    for (auto &decl : node.local_declarations) {
-        decl->accept(*this);
-    }
+    Value *ret_val = nullptr;
+    for (auto &decl : node.local_declarations)
+        ret_val = decl->accept(*this);
 
-    // 语句生成
     for (auto &stmt : node.statement_list) {
-        stmt->accept(*this);
+        ret_val = stmt->accept(*this);
         if (builder->get_insert_block()->get_terminator() != nullptr)
             break;
     }
 
-    if (need_exit_scope) {
+    if (need_exit_scope)
         scope.exit();
-    }
 
-    return nullptr;
+    return ret_val;
 }
 
 Value* CminusfBuilder::visit(ASTExpressionStmt &node) {
@@ -231,41 +213,44 @@ Value* CminusfBuilder::visit(ASTSelectionStmt &node) {
 }
 
 Value* CminusfBuilder::visit(ASTIterationStmt &node) {
-    //add code
-    auto exprBB = BasicBlock::create(module.get(), "", context.func);
+    // 创建循环条件块
+    auto exprBB = BasicBlock::create(module.get(), "while_cond", context.func);
 
-// 如果当前块没有 terminator，则跳转到循环条件块
-if (!builder->get_insert_block()->get_terminator())
-    builder->create_br(exprBB);
+    // 如果当前块没有终止指令，跳转到条件块
+    if (builder->get_insert_block()->get_terminator() == nullptr)
+        builder->create_br(exprBB);
 
-builder->set_insert_point(exprBB);
+    builder->set_insert_point(exprBB);
 
-// 生成循环条件
-auto ret_val = node.expression->accept(*this);
+    // 计算循环条件
+    Value *cond_val = node.expression->accept(*this);
 
-auto trueBB = BasicBlock::create(module.get(), "", context.func);
-auto contBB = BasicBlock::create(module.get(), "", context.func);
+    // 条件可能是 float 或 int
+    if (cond_val->get_type()->is_float_type())
+        cond_val = builder->create_fptosi(cond_val, INT32_T);
 
-Value *cond_val = nullptr;
-if (ret_val->get_type()->is_integer_type()) {
-    cond_val = builder->create_icmp_ne(ret_val, CONST_INT(0));
-} else {
-    cond_val = builder->create_fcmp_ne(ret_val, CONST_FP(0.));
-}
+    Value *cmp_val = nullptr;
+    if (cond_val->get_type()->is_integer_type())
+        cmp_val = builder->create_icmp_ne(cond_val, CONST_INT(0));
+    else
+        cmp_val = builder->create_fcmp_ne(cond_val, CONST_FP(0.));
 
-// 根据条件跳转
-builder->create_cond_br(cond_val, trueBB, contBB);
+    // 创建循环体块和循环结束块
+    auto loopBB = BasicBlock::create(module.get(), "while_body", context.func);
+    auto contBB = BasicBlock::create(module.get(), "while_end", context.func);
 
-// 循环体块
-builder->set_insert_point(trueBB);
-node.statement->accept(*this);
+    // 条件跳转
+    builder->create_cond_br(cmp_val, loopBB, contBB);
 
-// 循环结束跳回条件块
-if (!builder->get_insert_block()->get_terminator())
-    builder->create_br(exprBB);
+    // 循环体
+    builder->set_insert_point(loopBB);
+    node.statement->accept(*this);
+    if (builder->get_insert_block()->get_terminator() == nullptr)
+        builder->create_br(exprBB); // 循环回到条件块
 
-// 循环外块
-builder->set_insert_point(contBB);
+    // 循环结束
+    builder->set_insert_point(contBB);
+
     return nullptr;
 }
 
@@ -376,17 +361,16 @@ Value* CminusfBuilder::visit(ASTAssignExpression &node) {
 }
 
 Value* CminusfBuilder::visit(ASTSimpleExpression &node) {
-    ///add code
-    if (node.additive_expression_r == nullptr) {
+    if (!node.additive_expression_r)
         return node.additive_expression_l->accept(*this);
-    }
 
-    auto *l_val = node.additive_expression_l->accept(*this);
-    auto *r_val = node.additive_expression_r->accept(*this);
-    bool is_int = promote(&*builder, &l_val, &r_val);
+    Value *l_val = node.additive_expression_l->accept(*this);
+    Value *r_val = node.additive_expression_r->accept(*this);
+
+    bool is_int = promote(builder.get(), &l_val, &r_val);
 
     Value *cmp = nullptr;
-        switch (node.op) {
+    switch (node.op) {
         case OP_LT:
             if (is_int)
                 cmp = builder->create_icmp_lt(l_val, r_val);

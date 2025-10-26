@@ -114,22 +114,5 @@ class CminusfBuilder : public ASTVisitor {
         // detect scope pre-enter (for elegance only)
         bool pre_enter_scope = false;
         //add code
-        // 当前表达式的类型（int / float / void）
-    CminusType current_type = TYPE_VOID;
-    
-    // 当前运算符（AddOp / MulOp / RelOp）临时存储
-    AddOp current_add_op;
-    MulOp current_mul_op;
-    RelOp current_rel_op;
-
-    // 用于存储最近生成的 IR Value
-    Value *last_value = nullptr;
-
-    // 标记是否在函数返回语句中
-    bool in_return_stmt = false;
-
-    // 其它可扩展信息，例如循环标签或条件块
-    BasicBlock *break_block = nullptr;
-    BasicBlock *continue_block = nullptr;
     } context;
 };
