@@ -58,29 +58,41 @@ Value* CminusfBuilder::visit(ASTNum &node) {
 }
 
 Value* CminusfBuilder::visit(ASTVarDeclaration &node) {
-    Type *var_type = (node.type == TYPE_INT) ? INT32_T : FLOAT_T;
-    Value *var = nullptr;
-
-    if (node.num == nullptr) {
-        if (scope.in_global()) {
-            auto initializer = ConstantZero::get(var_type, module.get());
-            var = GlobalVariable::create(node.id, module.get(), var_type, false, initializer);
+    Type *type_elem = (node.type == TYPE_INT) ? INT32_T : FLOAT_T;
+    bool global_scope = (context.func == nullptr);
+    int array_len = node.num ? node.num->i_val : 0;
+    Value *result = nullptr;
+    if (array_len == 0) {
+        if (global_scope) {
+            result = GlobalVariable::create(
+                node.id,
+                module.get(),
+                type_elem,
+                false,
+                ConstantZero::get(type_elem, module.get())
+            );
         } else {
-            var = builder->create_alloca(var_type);
+            result = builder->create_alloca(type_elem);
         }
     } else {
-        auto *array_type = ArrayType::get(var_type, node.num->i_val);
-        if (scope.in_global()) {
-            auto initializer = ConstantZero::get(array_type, module.get());
-            var = GlobalVariable::create(node.id, module.get(), array_type, false, initializer);
+        Type *array_type = ArrayType::get(type_elem, array_len);
+
+        if (global_scope) {
+            result = GlobalVariable::create(
+                node.id,
+                module.get(),
+                array_type,
+                false,
+                ConstantZero::get(array_type, module.get())
+            );
         } else {
-            var = builder->create_alloca(array_type);
+            result = builder->create_alloca(array_type);
         }
     }
-
-    scope.push(node.id, var);
-    return var;
+    scope.push(node.id, result);
+    return result;
 }
+
 
 Value* CminusfBuilder::visit(ASTFunDeclaration &node) {
     FunctionType *fun_type;
@@ -142,28 +154,34 @@ Value* CminusfBuilder::visit(ASTFunDeclaration &node) {
 }
 
 Value* CminusfBuilder::visit(ASTParam &node) {
-    return nullptr;
+    // 计算类型：标量用本身，数组用指针
+    Type *type_to_alloc = node.isarray
+        ? ((node.type == TYPE_INT) ? INT32PTR_T : FLOATPTR_T)
+        : ((node.type == TYPE_INT) ? INT32_T : FLOAT_T);
+    // 分配空间并返回
+    return builder->create_alloca(type_to_alloc);
 }
 
 Value* CminusfBuilder::visit(ASTCompoundStmt &node) {
-    bool need_exit_scope = !context.pre_enter_scope;
-    if (context.pre_enter_scope) context.pre_enter_scope = false;
-    else scope.enter();
-
-    Value *ret_val = nullptr;
-    for (auto &decl : node.local_declarations)
-        ret_val = decl->accept(*this);
-
-    for (auto &stmt : node.statement_list) {
-        ret_val = stmt->accept(*this);
-        if (builder->get_insert_block()->get_terminator() != nullptr)
-            break;
+    bool open_scope = !context.pre_enter_scope;
+    if (!open_scope) {
+        context.pre_enter_scope = false;
+    } else {
+        scope.enter();
     }
-
-    if (need_exit_scope)
+    for (auto &local_decl : node.local_declarations) {
+        local_decl->accept(*this);
+    }
+    for (auto &stmt_item : node.statement_list) {
+        stmt_item->accept(*this);
+        if (builder->get_insert_block()->is_terminated()) {
+            break;
+        }
+    }
+    if (open_scope) {
         scope.exit();
-
-    return ret_val;
+    }
+    return nullptr;
 }
 
 Value* CminusfBuilder::visit(ASTExpressionStmt &node) {
@@ -213,46 +231,30 @@ Value* CminusfBuilder::visit(ASTSelectionStmt &node) {
 }
 
 Value* CminusfBuilder::visit(ASTIterationStmt &node) {
-    // 创建循环条件块
-    auto exprBB = BasicBlock::create(module.get(), "while_cond", context.func);
-
-    // 如果当前块没有终止指令，跳转到条件块
-    if (builder->get_insert_block()->get_terminator() == nullptr)
-        builder->create_br(exprBB);
-
-    builder->set_insert_point(exprBB);
-
-    // 计算循环条件
-    Value *cond_val = node.expression->accept(*this);
-
-    // 条件可能是 float 或 int
-    if (cond_val->get_type()->is_float_type())
-        cond_val = builder->create_fptosi(cond_val, INT32_T);
-
-    Value *cmp_val = nullptr;
-    if (cond_val->get_type()->is_integer_type())
-        cmp_val = builder->create_icmp_ne(cond_val, CONST_INT(0));
-    else
-        cmp_val = builder->create_fcmp_ne(cond_val, CONST_FP(0.));
-
-    // 创建循环体块和循环结束块
-    auto loopBB = BasicBlock::create(module.get(), "while_body", context.func);
-    auto contBB = BasicBlock::create(module.get(), "while_end", context.func);
-
-    // 条件跳转
-    builder->create_cond_br(cmp_val, loopBB, contBB);
-
-    // 循环体
-    builder->set_insert_point(loopBB);
+    Function *func = context.func;
+    BasicBlock *condBlock = BasicBlock::create(module.get(), "cond", func);
+    BasicBlock *bodyBlock = BasicBlock::create(module.get(), "body", func);
+    BasicBlock *endBlock  = BasicBlock::create(module.get(), "end", func);
+    builder->create_br(condBlock);
+    builder->set_insert_point(condBlock);
+    Value *condVal = node.expression->accept(*this);
+    Value *condBool = nullptr;
+    if (condVal->get_type()->is_integer_type()) {
+        condBool = builder->create_icmp_ne(condVal, CONST_INT(0));
+    } else {
+        condBool = builder->create_fcmp_ne(condVal, CONST_FP(0.0));
+    }
+    builder->create_cond_br(condBool, bodyBlock, endBlock);
+    builder->set_insert_point(bodyBlock);
     node.statement->accept(*this);
-    if (builder->get_insert_block()->get_terminator() == nullptr)
-        builder->create_br(exprBB); // 循环回到条件块
-
-    // 循环结束
-    builder->set_insert_point(contBB);
-
+    if (!builder->get_insert_block()->is_terminated()) {
+        builder->create_br(condBlock);
+    }
+    builder->set_insert_point(endBlock);
     return nullptr;
 }
+
+
 
 Value* CminusfBuilder::visit(ASTReturnStmt &node) {
     if (node.expression == nullptr) {
@@ -364,53 +366,39 @@ Value* CminusfBuilder::visit(ASTSimpleExpression &node) {
     if (!node.additive_expression_r)
         return node.additive_expression_l->accept(*this);
 
-    Value *l_val = node.additive_expression_l->accept(*this);
-    Value *r_val = node.additive_expression_r->accept(*this);
+    Value *left_val  = node.additive_expression_l->accept(*this);
+    Value *right_val = node.additive_expression_r->accept(*this);
 
-    bool is_int = promote(builder.get(), &l_val, &r_val);
+    bool integer_type = promote(&*builder, &left_val, &right_val);
 
-    Value *cmp = nullptr;
-    switch (node.op) {
-        case OP_LT:
-            if (is_int)
-                cmp = builder->create_icmp_lt(l_val, r_val);
-            else
-                cmp = builder->create_fcmp_lt(l_val, r_val);
-            break;
-        case OP_LE:
-            if (is_int)
-                cmp = builder->create_icmp_le(l_val, r_val);
-            else
-                cmp = builder->create_fcmp_le(l_val, r_val);
-            break;
-        case OP_GE:
-            if (is_int)
-                cmp = builder->create_icmp_ge(l_val, r_val);
-            else
-                cmp = builder->create_fcmp_ge(l_val, r_val);
-            break;
-        case OP_GT:
-            if (is_int)
-                cmp = builder->create_icmp_gt(l_val, r_val);
-            else
-                cmp = builder->create_fcmp_gt(l_val, r_val);
-            break;
-        case OP_EQ:
-            if (is_int)
-                cmp = builder->create_icmp_eq(l_val, r_val);
-            else
-                cmp = builder->create_fcmp_eq(l_val, r_val);
-            break;
-        case OP_NEQ:
-            if (is_int)
-                cmp = builder->create_icmp_ne(l_val, r_val);
-            else
-                cmp = builder->create_fcmp_ne(l_val, r_val);
-            break;
-        }
+    Value *cmp_res = nullptr;
 
-    return builder->create_zext(cmp, INT32_T);
+    if (integer_type) {
+        std::map<RelOp, std::function<Value*(Value*, Value*)>> int_cmp_map = {
+            {OP_LE, [this](Value* a, Value* b){ return builder->create_icmp_le(a, b); }},
+            {OP_LT, [this](Value* a, Value* b){ return builder->create_icmp_lt(a, b); }},
+            {OP_GT, [this](Value* a, Value* b){ return builder->create_icmp_gt(a, b); }},
+            {OP_GE, [this](Value* a, Value* b){ return builder->create_icmp_ge(a, b); }},
+            {OP_EQ, [this](Value* a, Value* b){ return builder->create_icmp_eq(a, b); }},
+            {OP_NEQ,[this](Value* a, Value* b){ return builder->create_icmp_ne(a, b); }}
+        };
+        cmp_res = int_cmp_map.at(node.op)(left_val, right_val);
+    } else {
+        std::map<RelOp, std::function<Value*(Value*, Value*)>> float_cmp_map = {
+            {OP_LE, [this](Value* a, Value* b){ return builder->create_fcmp_le(a, b); }},
+            {OP_LT, [this](Value* a, Value* b){ return builder->create_fcmp_lt(a, b); }},
+            {OP_GT, [this](Value* a, Value* b){ return builder->create_fcmp_gt(a, b); }},
+            {OP_GE, [this](Value* a, Value* b){ return builder->create_fcmp_ge(a, b); }},
+            {OP_EQ, [this](Value* a, Value* b){ return builder->create_fcmp_eq(a, b); }},
+            {OP_NEQ,[this](Value* a, Value* b){ return builder->create_fcmp_ne(a, b); }}
+        };
+        cmp_res = float_cmp_map.at(node.op)(left_val, right_val);
+    }
+
+    return builder->create_zext(cmp_res, INT32_T);
 }
+
+
 
 Value* CminusfBuilder::visit(ASTAdditiveExpression &node) {
     if (node.additive_expression == nullptr) {

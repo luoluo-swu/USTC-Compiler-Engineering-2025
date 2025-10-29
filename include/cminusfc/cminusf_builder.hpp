@@ -100,7 +100,6 @@ class CminusfBuilder : public ASTVisitor {
     virtual Value *visit(ASTVar &) override final;
     virtual Value *visit(ASTTerm &) override final;
     virtual Value *visit(ASTCall &) override final;
-    //add code
 
     std::unique_ptr<IRBuilder> builder;
     Scope scope;
@@ -113,6 +112,5 @@ class CminusfBuilder : public ASTVisitor {
         Function *func = nullptr;
         // detect scope pre-enter (for elegance only)
         bool pre_enter_scope = false;
-        //add code
     } context;
 };
