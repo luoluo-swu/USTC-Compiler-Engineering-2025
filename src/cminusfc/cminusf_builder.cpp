@@ -231,30 +231,28 @@ Value* CminusfBuilder::visit(ASTSelectionStmt &node) {
 }
 
 Value* CminusfBuilder::visit(ASTIterationStmt &node) {
-    Function *func = context.func;
-    BasicBlock *condBlock = BasicBlock::create(module.get(), "cond", func);
-    BasicBlock *bodyBlock = BasicBlock::create(module.get(), "body", func);
-    BasicBlock *endBlock  = BasicBlock::create(module.get(), "end", func);
-    builder->create_br(condBlock);
-    builder->set_insert_point(condBlock);
-    Value *condVal = node.expression->accept(*this);
-    Value *condBool = nullptr;
-    if (condVal->get_type()->is_integer_type()) {
-        condBool = builder->create_icmp_ne(condVal, CONST_INT(0));
+    auto *func = context.func;
+    auto *entryBB = BasicBlock::create(module.get(), "", func);
+    auto *loopBB = BasicBlock::create(module.get(), "", func);
+    auto *exitBB = BasicBlock::create(module.get(), "", func);
+    builder->create_br(entryBB);
+    builder->set_insert_point(entryBB);
+    auto *cond_expr = node.expression->accept(*this);
+    Value *condition = nullptr;
+    if (cond_expr->get_type()->is_integer_type()) {
+        condition = builder->create_icmp_ne(cond_expr, CONST_INT(0));
     } else {
-        condBool = builder->create_fcmp_ne(condVal, CONST_FP(0.0));
+        condition = builder->create_fcmp_ne(cond_expr, CONST_FP(0.0f));
     }
-    builder->create_cond_br(condBool, bodyBlock, endBlock);
-    builder->set_insert_point(bodyBlock);
+    builder->create_cond_br(condition, loopBB, exitBB);
+    builder->set_insert_point(loopBB);
     node.statement->accept(*this);
     if (!builder->get_insert_block()->is_terminated()) {
-        builder->create_br(condBlock);
+        builder->create_br(entryBB); 
     }
-    builder->set_insert_point(endBlock);
+    builder->set_insert_point(exitBB);
     return nullptr;
 }
-
-
 
 Value* CminusfBuilder::visit(ASTReturnStmt &node) {
     if (node.expression == nullptr) {
