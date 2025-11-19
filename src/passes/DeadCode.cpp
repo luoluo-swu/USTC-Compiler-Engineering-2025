@@ -57,7 +57,15 @@ void DeadCode::mark(Function *func) {
 }
 
 void DeadCode::mark(Instruction *ins) {
-    // TODO
+    for (auto &val : ins->get_operands()) {
+        auto* instrDef = dynamic_cast<Instruction*>(val);
+        if (!instrDef) continue;
+        bool alreadyMarked = marked[instrDef];
+        bool sameFunction = (instrDef->get_function() == ins->get_function());
+        if (alreadyMarked || !sameFunction) continue;
+        marked[instrDef] = true;
+        work_list.push_back(instrDef);
+    }
 }
 
 bool DeadCode::sweep(Function *func) {
