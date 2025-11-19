@@ -39,8 +39,21 @@ bool DeadCode::clear_basic_blocks(Function *func) {
 }
 
 void DeadCode::mark(Function *func) {
-    // TODO
-    
+    work_list.clear();
+    marked.clear();
+    for (auto &block : func->get_basic_blocks()) {
+        for (auto &instruction : block.get_instructions()) {
+            if (is_critical(&instruction)) {
+                marked.emplace(&instruction, true);
+                work_list.push_back(&instruction);
+            }
+        }
+    }
+    while (!work_list.empty()) {
+        Instruction* current = work_list.front();
+        work_list.pop_front();
+        mark(current);
+    }
 }
 
 void DeadCode::mark(Instruction *ins) {
