@@ -69,22 +69,26 @@ void DeadCode::mark(Instruction *ins) {
 }
 
 bool DeadCode::sweep(Function *func) {
-    // TODO: 删除无用指令
-    // 提示：
-    // 1. 遍历函数的基本块，删除所有标记为true的指令
-    // 2. 删除指令后，可能会导致其他指令的操作数变为无用，因此需要再次遍历函数的基本块
-    // 3. 如果删除了指令，返回true，否则返回false
-    // 4. 注意：删除指令时，需要先删除操作数的引用，然后再删除指令本身
-    // 5. 删除指令时，需要注意指令的顺序，不能删除正在遍历的指令
     std::unordered_set<Instruction *> wait_del{};
-
-    // 1. 收集所有未被标记的指令
- 
-
-    // 2. 执行删除
-  
-    
-    return not wait_del.empty(); // changed
+    for (auto &block : func->get_basic_blocks()) {
+        for (Instruction* instr : block.get_instructions()) {
+            if (!marked[instr]) {
+                wait_del.insert(instr);
+            }
+        }
+    }
+    for (Instruction* instr : wait_del) {
+        instr->remove_all_operands();
+    }
+    for (Instruction* instr : wait_del) {
+        auto parent = instr->get_parent();
+        if (parent) {
+            auto &instrs = parent->get_instructions();
+            instrs.erase(std::remove(instrs.begin(), instrs.end(), instr), instrs.end());
+        }
+    }
+    ins_count += wait_del.size();
+    return not wait_del.empty();
 }
 
 bool DeadCode::is_critical(Instruction *ins) {
