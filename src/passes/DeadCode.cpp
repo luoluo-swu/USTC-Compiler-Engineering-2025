@@ -90,13 +90,17 @@ bool DeadCode::sweep(Function *func) {
 }
 
 bool DeadCode::is_critical(Instruction *ins) {
-    // TODO: 判断指令是否是无用指令
-    // 提示：
-    // 1. 如果是函数调用，且函数是纯函数，则无用
-    // 2. 如果是无用的分支指令，则无用
-    // 3. 如果是无用的返回指令，则无用
-    // 4. 如果是无用的存储指令，则无用
-    
+    if (ins->is_call()) {
+        if (CallInst* call_ptr = dynamic_cast<CallInst*>(ins)) {
+            if (Function* target_func = dynamic_cast<Function*>(call_ptr->get_operand(0))) {
+                return !func_info->is_pure_function(target_func);
+            }
+        }
+        return true;
+    }
+    if (ins->is_br() || ins->is_ret()) return true;
+    if (ins->is_store()) return true;
+    return false;
 }
 
 void DeadCode::sweep_globally() {
