@@ -70,25 +70,23 @@ void DeadCode::mark(Instruction *ins) {
 
 bool DeadCode::sweep(Function *func) {
     std::unordered_set<Instruction *> wait_del{};
-    for (auto &block : func->get_basic_blocks()) {
-        for (Instruction* instr : block.get_instructions()) {
-            if (!marked[instr]) {
-                wait_del.insert(instr);
+    for (auto &bb : func->get_basic_blocks()) {
+        for (auto it = bb.get_instructions().begin();
+             it != bb.get_instructions().end();) {
+            if (marked[&*it]) {
+                ++it;
+                continue;
+            } else {
+                auto tmp = &*it;
+                wait_del.insert(tmp);
+                ++it;
             }
         }
     }
-    for (Instruction* instr : wait_del) {
-        instr->remove_all_operands();
-    }
-    for (Instruction* instr : wait_del) {
-        auto parent = instr->get_parent();
-        if (parent) {
-            auto &instrs = parent->get_instructions();
-            instrs.erase(std::remove(instrs.begin(), instrs.end(), instr), instrs.end());
-        }
-    }
+    for (auto inst : wait_del) inst->remove_all_operands();
+    for (auto inst : wait_del) inst->get_parent()->get_instructions().erase(inst);
     ins_count += wait_del.size();
-    return not wait_del.empty();
+    return not wait_del.empty(); // changed
 }
 
 bool DeadCode::is_critical(Instruction *ins) {
